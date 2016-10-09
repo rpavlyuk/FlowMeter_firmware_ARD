@@ -143,9 +143,10 @@ void pulseCounter()
   // Increment the pulse counter
   pulseCount++;
 
-  // debug
+#if USE_DEBUG
   Serial.print("Pulse count: ");
   Serial.println(pulseCount);
+#endif
 }
 
 /*
@@ -234,7 +235,6 @@ void loop()
             Serial.println("DEBUG: No current timestamp parameter provided");
 #endif          
       }
-    
     
     ether.httpServerReply(statusHomePage()); // send web page data
   }
