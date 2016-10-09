@@ -1,7 +1,13 @@
 
 // Ethernet water flow sensor
-// Using:
+// Author: Roman Pavlyuk <roman.pavlyuk@gmail.com>
+// Src: https://github.com/rpavlyuk/FlowMeter_firmware_ARD
+
+// Needed:
+// - Arduino Uno (verified) or Arduino Nano (test in progress)
 // - ENC28J60 ehternet adapter
+// - 3-pin flow sensor (aka "fan in the pipe")
+// - External power (to use autonomously)
 
 // PINs:
 //  * ENC28J60:
@@ -11,6 +17,11 @@
 //     SO  - Pin D12 
 //     SI  - Pin D11
 //     CS  - Pin D8
+//  * FLOW SENSOR:
+//     GND (black)    - GND
+//     VCC (red)      - 5V
+//     DATA (yellow)  - Pin D2 
+
 
 
 #include <enc28j60.h>
@@ -19,7 +30,7 @@
 
 #include <avr/pgmspace.h>
 
-#include <HttpRequest.h>
+#include "HttpRequest.h"
 
 /*** BEGIN Ethernet Setup  ***/
 
@@ -54,12 +65,6 @@ byte sensorPin       = 2;
 float calibrationFactor = 4.5;
 
 volatile unsigned long pulseCount = 0;  
-
-float flowRate;
-unsigned int flowMilliLitres;
-unsigned long totalMilliLitres;
-
-unsigned long oldTime;
 
 /*** END Flow sensor setup ***/
 
@@ -123,10 +128,6 @@ void setupFlowSensor() {
   digitalWrite(sensorPin, HIGH);
 
   pulseCount        = 0;
-  flowRate          = 0.0;
-  flowMilliLitres   = 0;
-  totalMilliLitres  = 0;
-  oldTime           = 0;
 
   // The Hall-effect sensor is connected to pin 2 which uses interrupt 0.
   // Configured to trigger on a FALLING state change (transition from HIGH
@@ -159,29 +160,6 @@ void setup()
 
     // setup flow sensor
     setupFlowSensor();
-}
-
-//  Here we build a web page and pass the values into it in JSON format
-static word homePage() {
-  
-  
-  bfill = ether.tcpOffset();
-  bfill.emit_p(PSTR(
-    "HTTP/1.0 200 OK\r\n"
-    "Content-Type: application/json\r\n"
-    "Pragma: no-cache\r\n"
-    "\r\n"
-    "{\n"
-      "\"sensorId\" : \"$S\",\n"
-      "\"sensorName\" : \"$S\",\n"
-      "\"sensorDescr\" : \"$S\",\n"
-      "\"ticks\" : \"$S\",\n"
-      "\"flowrate\" : \"$S\",\n"
-      "\"flowML\" : \"$S\",\n"
-      "\"flowTotalML\" : \"$S\",\n"
-    "}\n"),
-  sensorId, sensorName, sensorDescr);
-  return bfill.position();
 }
 
 /*
