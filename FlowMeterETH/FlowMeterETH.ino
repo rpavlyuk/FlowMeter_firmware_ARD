@@ -83,8 +83,8 @@ char hd_val_CurrentTS[TS_SIZE] = "00000000000000000000";
 const char hd_key_Received[] = "previousTS";
 const char hd_key_Current[] = "currentTS";
 
-#define USE_DEBUG   1   // set to 1 to enable debug mode
-#define USE_SERIAL  1   // set to 1 to show incoming requests on serial port
+#define USE_DEBUG   0   // set to 1 to enable debug mode
+#define USE_SERIAL  0   // set to 1 to show incoming requests on serial port
 
 //Create an object to handle the HTTP request
 HttpRequest httpReq;
@@ -169,11 +169,11 @@ void setup()
 static word statusHomePage() {
   
  char ticks[10];
- ltoa(pulseCount, ticks, 10);
+ ultoa(pulseCount, ticks, 10);
 
  // 10 chars is enough to represent unsigned long value
  char mi[10];
- ltoa(millis(), mi, 10);
+ ultoa(millis(), mi, 10);
   
   bfill = ether.tcpOffset();
   bfill.emit_p(PSTR(
