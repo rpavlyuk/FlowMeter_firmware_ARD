@@ -1,4 +1,3 @@
-
 // Ethernet water flow sensor
 // Author: Roman Pavlyuk <roman.pavlyuk@gmail.com>
 // Src: https://github.com/rpavlyuk/FlowMeter_firmware_ARD
@@ -64,7 +63,9 @@ byte sensorPin       = 2;
 // litre/minute of flow.
 float calibrationFactor = 4.5;
 
-volatile unsigned long pulseCount = 0;  
+volatile unsigned long pulseCount = 0;
+
+const unsigned long maxPulsesToReset = 256000;
 
 /*** END Flow sensor setup ***/
 
@@ -147,6 +148,14 @@ void pulseCounter()
   Serial.print("Pulse count: ");
   Serial.println(pulseCount);
 #endif
+
+   /* Protect against buffer overload */
+   if (pulseCount > maxPulsesToReset) {
+#if USE_DEBUG
+   Serial.print(F("Resetting pulse counter!"));
+#endif
+   pulseCount = 0;
+ }
 }
 
 /*
@@ -244,4 +253,3 @@ void loop()
   }
 
 }
-
