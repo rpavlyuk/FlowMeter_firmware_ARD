@@ -1,4 +1,3 @@
-
 // Ethernet water flow sensor
 // Author: Roman Pavlyuk <roman.pavlyuk@gmail.com>
 // Src: https://github.com/rpavlyuk/FlowMeter_firmware_ARD
@@ -22,15 +21,20 @@
 //     VCC (red)      - 5V
 //     DATA (yellow)  - Pin D2 
 
+#include <UIPEthernet.h>
 
-
+/*
 #include <enc28j60.h>
 #include <EtherCard.h>
 #include <net.h>
+*/
+
+// #include <PubSubClient.h>
+
 
 #include <avr/pgmspace.h>
 
-#include "HttpRequest.h"
+//  #include "HttpRequest.h"
 
 /*** BEGIN Ethernet Setup  ***/
 
@@ -40,16 +44,25 @@
 
 #if STATIC
 // ethernet interface ip address
-static byte myip[] = { 192,168,1,216 };
+static byte myip[] = { 192,168,3,216 };
 // gateway ip address
 static byte gwip[] = { 192,168,1,1 };
+// dns ip address
+static byte dnsip[] = { 192,168,1,5 };
+// mask ip
+static byte maskip[] = { 255,255,0,0 };
 #endif
 
-// ethernet mac address - must be unique on your network
-static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x35,0x32 };
+// CS PIN
+#define PIN_CS 8
 
-byte Ethernet::buffer[500]; // tcp/ip send and receive buffer
-BufferFiller bfill;
+// ethernet mac address - must be unique on your network
+static byte mymac[6] = { 0x74,0x69,0x69,0x2D,0x35,0x32 };
+// char macstr[] = "7469692d3532";
+// byte Ethernet::buffer[500]; // tcp/ip send and receive buffer
+// BufferFiller bfill;
+
+EthernetServer server = EthernetServer(80);;
 
 /*** END Ethernet Setup  ***/
 
@@ -66,15 +79,27 @@ float calibrationFactor = 4.5;
 
 volatile unsigned long pulseCount = 0;  
 
+const unsigned long maxPulsesToReset = 256000;
+
 /*** END Flow sensor setup ***/
+
+/*** BEGIN MQTT settings ***/
+
+char servername[]="192.168.1.7";
+// String clientName = String("waterflowmeter:") + macstr;
+// String topicName = String("home/utility/water/inbound/json");
+
+// PubSubClient client(servername, 1883, 0, ether);
+
+/*** END MQTT settings ***/
 
 /*** BEGIN other settings ***/
 
+// Timestamp string size
 #define TS_SIZE 21
 
+// Sensor information
 const char sensorId[] = "1";
-const char sensorName[] = "Water Flow Sensor";
-const char sensorDescr[] = "Water Flow meter for home water supply";
 
 // timestamp format: YYYYMMDDhhmmsskkkkkk
 // kkkkkk -- microseconds as returned by datetime object in Python
@@ -83,11 +108,11 @@ char hd_val_CurrentTS[TS_SIZE] = "00000000000000000000";
 const char hd_key_Received[] = "previousTS";
 const char hd_key_Current[] = "currentTS";
 
-#define USE_DEBUG   0   // set to 1 to enable debug mode
+#define USE_DEBUG   1   // set to 1 to enable debug mode
 #define USE_SERIAL  0   // set to 1 to show incoming requests on serial port
 
 //Create an object to handle the HTTP request
-HttpRequest httpReq;
+// HttpRequest httpReq;
 
 /*** END other settings ***/
 
@@ -98,20 +123,36 @@ HttpRequest httpReq;
  */
 void setupNetwork() {
 
-    // network setup
-    Serial.println("\nInitializing Ethernet module...");
-    if (ether.begin(sizeof Ethernet::buffer, mymac) == 0) 
-      Serial.println( "Failed to access Ethernet controller");
+   // network setup
+   Serial.println(F("\nInitializing Ethernet module..."));
+   Ethernet.init(PIN_CS);
 #if STATIC
-      ether.staticSetup(myip, gwip);
+   Ethernet.begin(mymac, myip, dnsip, gwip, maskip);  
 #else
-      if (!ether.dhcpSetup())
-        Serial.println("DHCP failed");
+   Ethernet.begin(mymac);
 #endif
 
-    ether.printIp("IP:  ", ether.myip);
-    ether.printIp("GW:  ", ether.gwip);  
-    ether.printIp("DNS: ", ether.dnsip);   
+   // delay(500);
+
+   Serial.print(F("Link status: "));
+   Serial.println(Ethernet.linkStatus());
+
+
+   Serial.println(F("= Connection info ="));
+   Serial.print(F("IP Address: "));
+   Serial.println(Ethernet.localIP());
+   /*
+   Serial.print("Subnet Mask: ");   
+   Serial.println(Ethernet.subnetMask());
+   Serial.print("Gateway: ");  
+   Serial.println(Ethernet.gatewayIP());
+   Serial.print("DNS: ");
+   Serial.println(Ethernet.dnsServerIP());
+   */
+
+   Serial.println("");
+   Serial.println(F("Starting HTTP server ..."));
+   server.begin();
   
 }
 
@@ -147,6 +188,14 @@ void pulseCounter()
   Serial.print("Pulse count: ");
   Serial.println(pulseCount);
 #endif
+
+ /* Protect against buffer overload */
+ if (pulseCount > maxPulsesToReset) {
+ #if USE_DEBUG
+   Serial.print(F("Resetting pulse counter!"));
+ #endif
+   pulseCount = 0;
+ }
 }
 
 /*
@@ -164,45 +213,92 @@ void setup()
 }
 
 /*
- * Build JSON object as a response to the HTTP request
+ * Build JSON for MQTT
+ * 
  */
-static word statusHomePage() {
-  
- char ticks[10];
- ultoa(pulseCount, ticks, 10);
+ char* buildJson() {
 
- // 10 chars is enough to represent unsigned long value
- char mi[10];
- ultoa(millis(), mi, 10);
+   char ticks[10];
+   ultoa(pulseCount, ticks, 10);
   
-  bfill = ether.tcpOffset();
-  bfill.emit_p(PSTR(
-    "HTTP/1.0 200 OK\r\n"
-    "Content-Type: application/json\r\n"
-    "Pragma: no-cache\r\n"
-    "\r\n"
-    "{\n"
+   // 10 chars is enough to represent unsigned long value
+   char mi[10];
+   ultoa(millis(), mi, 10);
+
+   char * data;
+
+   /*
+   const static char jsonTmpl[] PROGMEM = "{"
       "\"data\" : {\n"
-        "\"sensorId\" : \"$S\",\n"
-        "\"sensorName\" : \"$S\",\n"
-        "\"sensorDescr\" : \"$S\",\n"
-        "\"ticks\" : \"$S\",\n"
-        "\"currentTS\" : \"$S\",\n"
-        "\"previousTS\" : \"$S\",\n"
-        "\"millis\" : \"$S\"\n"
+        "\"sensorId\" : \"%s\",\n"
+        "\"sensorName\" : \"%s\",\n"
+        "\"sensorDescr\" : \"%s\",\n"
+        "\"ticks\" : \"%s\",\n"
+        "\"currentTS\" : \"%s\",\n"
+        "\"previousTS\" : \"%s\",\n"
+        "\"millis\" : \"%s\"\n"
       "},\n"
       "\"status\" : \"OK\",\n"
       "\"error\" : \"N/A\"\n"
-    "}\n"),
-  sensorId, sensorName, sensorDescr, ticks, hd_val_CurrentTS, hd_val_PreviousTS, mi);
-  return bfill.position();
+    "}\n";
+    */
+    sprintf(data, 
+      "{"
+        "\"data\" : {\n"
+          "\"sensorDescr\" : \"%s\",\n"
+          "\"ticks\" : \"%s\",\n"
+          "\"currentTS\" : \"%s\",\n"
+          "\"previousTS\" : \"%s\",\n"
+          "\"millis\" : \"%s\"\n"
+        "},\n"
+        "\"status\" : \"OK\",\n"
+        "\"error\" : \"N/A\"\n"
+      "}\n", 
+      sensorId,
+      ticks,
+      hd_val_CurrentTS,
+      hd_val_PreviousTS,
+      mi
+      );
+ 
+#if USE_DEBUG
+   Serial.print(F("Built JSON: "));
+   Serial.println(data);
+   Serial.println(strlen(data));
+#endif   
+    return data;
+}
+
+
+
+/*
+ * Build JSON object as a response to the HTTP request
+ */
+static char* statusHomePage() {
+
+  char * response;
+
+  sprintf(
+    response, 
+    PSTR(
+      "HTTP/1.0 200 OK\r\n"
+    "Content-Type: application/json\r\n"
+    "Pragma: no-cache\r\n"
+    "\r\n"
+    "%s"
+      ), 
+    buildJson()
+    );
+
 }
 
 void loop()
 {
   // temporary buffer for the value of current timestamp
   char hd_val_TempTS[TS_SIZE];
-  
+
+
+  /*
   word len = ether.packetReceive();
   word pos = ether.packetLoop(len);
 
@@ -243,5 +339,77 @@ void loop()
     ether.httpServerReply(statusHomePage()); // send web page data
   }
 
-}
+  */
 
+  EthernetClient client = server.available();
+  delay(500);
+  
+  if (client)
+  { 
+#if USE_DEBUG
+    Serial.println(F("-> New Connection"));
+#endif  
+    // an http request ends with a blank line
+    boolean currentLineIsBlank = true;
+ 
+    while (client.connected())
+    {
+      if (client.available())
+      {
+        char c = client.read();
+ 
+        // if you've gotten to the end of the line (received a newline
+        // character) and the line is blank, the http request has ended,
+        // so you can send a reply
+        if (c == '\n' && currentLineIsBlank) {
+
+          /*
+          client.println("HTTP/1.1 200 OK");
+          client.println("Content-Type: text/html");
+          client.println("Connection: close");  // the connection will be closed after completion of the response
+          client.println("Refresh: 5");  // refresh the page automatically every 5 sec
+          client.println();
+          client.println("<!DOCTYPE HTML>");
+          client.println("<html>");
+          // output the value of each analog input pin
+          //for (int analogChannel = 0; analogChannel < 6; analogChannel++) {
+          //  int sensorReading = analogRead(analogChannel);
+            client.print("M7A ");
+            // client.print(VA);
+            client.println("<br />");
+            client.print("M7B ");
+//            client.print(VB);
+            client.println("<br />");
+          //}
+          client.println("</html>");
+          */
+
+          client.println(statusHomePage());
+          
+          break;
+          
+          break;
+        }
+ 
+        if (c == '\n') {
+          // you're starting a new line
+          currentLineIsBlank = true;
+        }
+        else if (c != '\r')
+        {
+          // you've gotten a character on the current line
+          currentLineIsBlank = false;
+        }
+      }
+    }
+ 
+    // give the web browser time to receive the data
+    delay(10);
+ 
+    // close the connection:
+    client.stop();
+    Serial.println(F("   Disconnected\n"));
+//    digitalWrite(rele, HIGH);
+  }
+
+}
